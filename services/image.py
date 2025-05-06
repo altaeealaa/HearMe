@@ -5,7 +5,7 @@ from gtts import gTTS
 from transformers import BlipProcessor, BlipForConditionalGeneration
 from telegram import Update
 from telegram.ext import ContextTypes
-from database.database import save_group, save_group_message
+from database.database_functions import save_group, save_group_message
 
 # Load BLIP model once
 device = "cuda" if torch.cuda.is_available() else "cpu"

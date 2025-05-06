@@ -7,7 +7,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN") # Configuration for Telegram Bot from ".env"
 
 #Whisper Model
-WHISPER_MODEL = "base"
+WHISPER_MODEL = "base"  
 model = whisper.load_model(WHISPER_MODEL)
 
 '''# Directory to store temporary files

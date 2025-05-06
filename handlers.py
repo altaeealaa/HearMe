@@ -1,11 +1,16 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from database.database import add_user, get_user_role
-from database.database import conn, cursor
-from database.database import save_group_message, save_group
+from database.database_functions import add_user, get_user_role, get_preffered_language
+from database.database_setup import conn, cursor
+from database.database_functions import save_group_message, save_group
 from services.tts_service import text_to_speech, handle_after_ask
+from services.stt_service import speech_to_text
 import sqlite3
-#import pyttsx3
+import string
+
+def normalize_text(text):
+    # Convert to lowercase and strip trailing punctuation
+    return text.lower().strip(string.punctuation)
 
 # Handle /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -13,33 +18,75 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_role = get_user_role(user_id)  # Check if the user already has a role in the database
     if user_role:
         # If user already has a role, show them their role
-        await update.message.reply_text(f"Your role is already set to {user_role.capitalize()}. Use /check to continue.")
+        replied_voice = await text_to_speech(f"Your role is already set to {user_role.capitalize()}. Use /check to continue.")
+        await update.message.reply_voice(replied_voice)
         return  # Exit the function, no need to show the role selection
 
     # If no role is set, allow the user to choose their role
-    keyboard = [
-        [InlineKeyboardButton("🔵 I am blind", callback_data='role_blind')],
-        [InlineKeyboardButton("🟢 I am sighted", callback_data='role_sighted')]
-        ]
-    markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "Welcome! Are you a blind user or a sighted user?",
-        reply_markup=markup
-        )
+    ask_role = "Welcome to HearMe! I'm a voice-based assistant designed to help you navigate and interact with content using speech. To get started, could you please let me know if you are blind or sighted? Reply by a voice"
+    ask_rule_voice = await text_to_speech(ask_role)
+    await update.message.reply_voice(ask_rule_voice)
 
 
+async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    preffered_language = get_preffered_language(user_id)
+    if preffered_language:
+        language_in_voice = await text_to_speech(f"The language is already set to {preffered_language}")
+        await update.message.reply_voice(language_in_voice)
+        return 
+
+    ask_language = "Please specify the language you prefer me to communicate with, Arabic or English. الرجاء اختيار اللغة التي تفضّلون التواصل معي بها، العربية أو الانجليزية."
+    ask_language_voice = await text_to_speech(ask_language)
+    await update.message.reply_voice(ask_language_voice)
+
+async def reply_after_langauge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    voice = update.message.voice
+    user_input_text = normalize_text( await speech_to_text(voice))
+    print(user_input_text)
+    # Check if the langiage is Arabic ro English
+    if user_input_text == "arabic":
+        language = "arabic"
+    elif user_input_text == "sighted":
+        language = "english"
+    else:
+        # If the bot didn't understand, ask the user again
+        await update.message.reply_voice(voice= await text_to_speech("I didn't understand. Please say Arabic or English"))
+        return  # Exit the function to wait for the user to say again
+
+    # After determining the language, store it in the database
+    user_id = update.message.from_user.id
+    name = update.message.from_user.full_name
+    role = get_user_role(user_id)
+    add_user(user_id, name, role, language)
+
+    # Send a confirmation voice message
+    confirmation_text = f"The language is set to {language.capitalize()}. Use the check command to continue."
+    await update.message.reply_voice(voice=await text_to_speech(confirmation_text))
 
 # --- Handle Role Selection ---
 async def set_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    name = query.from_user.full_name
-    role = 'blind' if query.data == 'role_blind' else 'sighted'
-    
-    add_user(user_id,name,role)
-    await query.edit_message_text(f"✅ Your role is set to {role.capitalize()}. Use /check to continue.")
+    voice = update.message.voice
+    user_input_text = normalize_text( await speech_to_text(voice))
+    print(user_input_text)
+    # Check if the transcribed text is 'blind' or 'sighted' and set the role
+    if user_input_text == "blind":
+        role = "blind"
+    elif user_input_text == "sighted":
+        role = "sighted"
+    else:
+        # If the bot didn't understand, ask the user again
+        await update.message.reply_voice(voice= await text_to_speech("I didn't understand. Please say 'blind' or 'sighted'."))
+        return  # Exit the function to wait for the user to say again
+
+    # After determining the role, store it in the database
+    user_id = update.message.from_user.id
+    name = update.message.from_user.full_name
+    add_user(user_id, name, role)
+
+    # Send a confirmation voice message
+    confirmation_text = f"Your role is set to {role.capitalize()}. Use the check command to continue."
+    await update.message.reply_voice(voice=await text_to_speech(confirmation_text))
 
 
 async def handle_group_message(update: Update, context):
