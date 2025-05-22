@@ -46,7 +46,6 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif context.user_data.get("awaiting_role"):
                 await set_role(update, context, normalized)
 
-
         # Handle commands only for blind users in private chat
         elif role == "blind" and chat_type == "private":
             matched_check = fuzzy_language_match(normalized, check_keywords)
@@ -68,6 +67,9 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 handled = await handle_switch_to_command(update, context, normalized)
                 if handled:
                     return
+            elif context.user_data.get("awaiting_group_reply"):
+                await handle_voice_reply(update, context)
+                context.user_data["awaiting_group_reply"] = False   
             elif matched_group:
                 print("[DEBUG] Voice command matched: /group")
                 await group_command(update, context)
@@ -82,10 +84,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             elif context.user_data.get("awaiting_yes_no_reply"):
                 context.user_data["awaiting_yes_no_reply"] = False
-                await handle_after_ask(update, context)
-            elif context.user_data.get("awaiting_group_reply"):
-                await handle_voice_reply(update, context)
-                context.user_data["awaiting_group_reply"] = False                      
+                await handle_after_ask(update, context)                   
             else:
                 print(f"[DEBUG] Unmatched voice command: {normalized}")
                 await update.message.reply_voice(

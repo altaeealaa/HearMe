@@ -104,7 +104,7 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
     messages = cursor.fetchall()
 
     if messages:
-        # to group the messages by the same sender
+        # Group messages by sender
         voice_output = ""
         grouped = []
         prev_sender = None
@@ -112,33 +112,26 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         for sender_name, message_text in messages:
             if sender_name == prev_sender:
-                # If the sender is the same as the previous one, append the message
                 current_texts.append(message_text)
             else:
                 if prev_sender is not None:
-                    # If the sender has changed, say sender's name before the new message
                     grouped.append((prev_sender, current_texts))
+                #there is no previous sender, first message in group
                 prev_sender = sender_name
                 current_texts = [message_text]
-        # Add the last group
+        # for the last message
         if prev_sender is not None:
             grouped.append((prev_sender, current_texts))
 
-        # Create the voice output
         for sender, texts in grouped:
             merged_text = ", ".join(texts)
-            if language == "arabic":
-                voice_output += f"{sender} قال {merged_text}. "
-            else:
-                voice_output += f"{sender} said {merged_text}. "
+            voice_output += f"{sender} said {merged_text}. "
 
         if language == "arabic":
             full_voice = voice_output.strip() + " هل تريد الرد؟ (قل نعم أو لا)"
         else:
             full_voice = voice_output.strip() + " Do you want to reply? (Say 'yes' or 'no')"
-
-        output_voice = await text_to_speech(full_voice)
-        await update.message.reply_voice(output_voice)
+        await update.message.reply_voice(await text_to_speech(full_voice))
 
         context.user_data["awaiting_yes_no_reply"] = True
 
