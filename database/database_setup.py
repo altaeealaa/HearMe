@@ -60,5 +60,11 @@ def setup_database():
         )
     ''')
 
+    # Optional performance index
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_message_deliveries_delivered
+            ON message_deliveries (user_id, delivered)
+    ''')
+
     conn.commit()
     print("✅ Tables created successfully")

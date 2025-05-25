@@ -127,12 +127,19 @@ def get_undelivered_messages(user_id, group_id):
 
 
 def mark_messages_as_delivered(user_id, message_ids):
+    if not message_ids:
+        return  # No messages to mark
+
     cursor.executemany('''
         UPDATE message_deliveries
-        SET delivered = TRUE
+        SET delivered = TRUE, delivered_at = CURRENT_TIMESTAMP
         WHERE user_id = %s AND message_id = %s
     ''', [(user_id, message_id) for message_id in message_ids])
     conn.commit()
+
+    # ✅ Trigger cleanup immediately after marking delivered
+    delete_fully_delivered_messages()
+
 
 
 
@@ -144,6 +151,8 @@ def delete_fully_delivered_messages():
             SELECT m.message_id
             FROM messages m
             JOIN message_deliveries d ON m.message_id = d.message_id
+            JOIN users u ON d.user_id = u.user_id
+            WHERE u.role = 'blind'
             GROUP BY m.message_id
             HAVING BOOL_AND(d.delivered) = TRUE
         )

@@ -6,7 +6,7 @@ from services.tts_service import text_to_speech
 from services.stt_service import speech_to_text
 from handlers.helper_functions import normalize_text, fuzzy_language_match, get_normalized_user_groups
 from database.database_functions import get_user_language, add_user_to_group
-
+import datetime
 
 
 # --- Handle Group Message ---
@@ -42,7 +42,8 @@ async def handle_group_message(update: Update, context):
     # This is a dictionary to map group names to their IDs
     if "group_map" not in context.bot_data:
         context.bot_data["group_map"] = {}
-        context.bot_data["group_map"][group_name] = group_id
+    context.bot_data["group_map"][group_name] = group_id
+
 
 
 
@@ -89,6 +90,8 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     group_id, original_name = normalized_dict[matched_normalized]
 
+
+    # Fetch messages not delivered to this blind user
     cursor.execute('''
         SELECT m.message_id, m.sender_name, m.message_text
         FROM messages m
@@ -131,34 +134,37 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["selected_group"] = original_name
         context.user_data["awaiting_group_choice"] = False
 
-        # Mark messages as delivered for this user
-        for message_id in message_ids_to_mark:
-            cursor.execute('''
-                INSERT INTO message_deliveries (message_id, user_id, delivered)
-                VALUES (%s, %s, TRUE)
-                ON CONFLICT (message_id, user_id) DO UPDATE SET delivered = TRUE
-            ''', (message_id, user_id))
+        # Mark messages as delivered for this blind user
+        cursor.executemany('''
+            INSERT INTO message_deliveries (message_id, user_id, delivered)
+            VALUES (%s, %s, TRUE)
+            ON CONFLICT (message_id, user_id) DO UPDATE SET delivered = TRUE
+        ''', [(mid, user_id) for mid in message_ids_to_mark])
         conn.commit()
 
-        # Try deleting messages fully delivered
+        # Delete messages that are fully delivered to all blind users in that group
         cursor.execute('''
             DELETE FROM messages
             WHERE message_id IN (
                 SELECT m.message_id
                 FROM messages m
                 JOIN message_deliveries d ON m.message_id = d.message_id
+                JOIN users u ON d.user_id = u.user_id
+                WHERE u.role = 'blind'
                 GROUP BY m.message_id
                 HAVING BOOL_AND(d.delivered) = TRUE
             )
         ''')
         conn.commit()
-
     else:
-        msg = "حسنًا. سجل رسالتك الصوتية وسأرسلها إلى المجموعة." if language == "arabic" else "Okay. Record your voice and I’ll send it to the group."
+        msg = "لا توجد رسائل جديدة. هل تريد إرسال رسالة قل نعم أو لا ؟" if language == "arabic" else "No new messages. Do you want to send one say yes or no?"
         await update.message.reply_voice(await text_to_speech(msg))
-        context.user_data["awaiting_group_reply"] = True
-        context.user_data["selected_group"] = original_name
-        context.user_data["awaiting_group_choice"] = False
+        context.user_data["awaiting_yes_no_reply"] = True
+
+    context.user_data["selected_group"] = original_name
+    context.user_data["awaiting_group_choice"] = False
+
+        
 
 
 
@@ -186,14 +192,13 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
         print(f"[DEBUG] Group not found: {group_choice}")
         await update.message.reply_voice(await text_to_speech(msg))
         return
-    
-    group_id, original_name = normalized_dict[matched_normalized]
 
     if not matched_normalized:
         msg = "لم أتمكن من العثور على هذه المجموعة. حاول مرة أخرى." if language == "arabic" else "I couldn’t find that group. Try another one."
         await update.message.reply_voice(await text_to_speech(msg))
         return True  # Handled as a switch command, but group not found
     
+    group_id, original_name = normalized_dict[matched_normalized]
 
     #Get group_id for matched group_name
     cursor.execute('SELECT group_id FROM groups WHERE group_name ILIKE %s', (original_name,))
@@ -205,31 +210,33 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
 
     group_id = group_row[0]
 
-    # Get messages
+    # Fetch messages not delivered to this blind user
     cursor.execute('''
-        SELECT sender_name, message_text FROM messages
-        WHERE group_id = %s
-        ORDER BY created_at ASC
-    ''', (group_id,))
+        SELECT m.message_id, m.sender_name, m.message_text
+        FROM messages m
+        LEFT JOIN message_deliveries d ON m.message_id = d.message_id AND d.user_id = %s
+        WHERE m.group_id = %s AND (d.delivered IS NULL OR d.delivered = FALSE)
+        ORDER BY m.created_at ASC
+    ''', (user_id, group_id))
     messages = cursor.fetchall()
 
     if messages:
-        # Group messages by sender
         voice_output = ""
         grouped = []
         prev_sender = None
         current_texts = []
 
-        for sender_name, message_text in messages:
+        message_ids_to_mark = []
+
+        for message_id, sender_name, message_text in messages:
+            message_ids_to_mark.append(message_id)
             if sender_name == prev_sender:
                 current_texts.append(message_text)
             else:
                 if prev_sender is not None:
                     grouped.append((prev_sender, current_texts))
-                #there is no previous sender, first message in group
                 prev_sender = sender_name
                 current_texts = [message_text]
-        # for the last message
         if prev_sender is not None:
             grouped.append((prev_sender, current_texts))
 
@@ -244,17 +251,36 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_voice(await text_to_speech(full_voice))
 
         context.user_data["awaiting_yes_no_reply"] = True
+        context.user_data["selected_group"] = original_name
+        context.user_data["awaiting_group_choice"] = False
 
-        # Delete messages after reading
+        # Mark messages as delivered for this blind user
+        cursor.executemany('''
+            INSERT INTO message_deliveries (message_id, user_id, delivered)
+            VALUES (%s, %s, TRUE)
+            ON CONFLICT (message_id, user_id) DO UPDATE SET delivered = TRUE
+        ''', [(mid, user_id) for mid in message_ids_to_mark])
+        conn.commit()
+
+        # Delete messages that are fully delivered to all blind users in that group
         cursor.execute('''
             DELETE FROM messages
-            WHERE group_id = %s
-        ''', (group_id,))
+            WHERE message_id IN (
+                SELECT m.message_id
+                FROM messages m
+                JOIN message_deliveries d ON m.message_id = d.message_id
+                JOIN users u ON d.user_id = u.user_id
+                WHERE u.role = 'blind'
+                GROUP BY m.message_id
+                HAVING BOOL_AND(d.delivered) = TRUE
+            )
+        ''')
         conn.commit()
+    
     else:
         # No messages in the group, prompt to send one
         if language == "arabic":
-            msg = f"تم الانتقال إلى {original_name}. لا توجد رسائل جديدة. هل تريد إرسال رسالة؟"
+            msg = f"تم الانتقال إلى {original_name}. لا توجد رسائل جديدة. هل تريد إرسال رسالة قل نعم أو لا ؟"
         else:
             msg = f"Switched to {original_name}. No new messages. Do you want to send one say yes or no?"
         await update.message.reply_voice(await text_to_speech(msg))
@@ -313,7 +339,9 @@ async def handle_after_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Handles sending a user's voice reply to the selected group.
 async def handle_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    username = update.effective_user.username
     language = get_user_language(user_id) 
+    name = update.effective_chat.full_name
 
     # Check if the bot is expecting a group reply
     if not context.user_data.get("awaiting_group_reply"):
@@ -364,19 +392,69 @@ async def handle_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         voice_reply = await text_to_speech(msg)
         await update.message.reply_voice(voice_reply)
         return
+    
 
     # Try to send the voice message to the group
     try:
+        #send voice message
         await context.bot.send_voice(chat_id=group_chat_id, voice=voice.file_id)
+        # Send text showing who sent the voice
+        sender_text = f"This message is from {username}." if language == "english" else f"هذه الرسالة من {username}."
+        await context.bot.send_message(chat_id=group_chat_id, text=sender_text)
+
+
+        # Check if there are other blind users in the group
+        cursor.execute('''
+            SELECT ug.user_id
+            FROM user_groups ug
+            JOIN users u ON ug.user_id = u.user_id
+            JOIN groups g ON ug.group_id = g.group_id
+            WHERE g.group_id = %s AND u.role = 'blind' AND u.user_id != %s
+        ''', (group_chat_id, user_id))
+        blind_users = cursor.fetchall()
+
+        if blind_users:
+            # Transcribe voice
+            transcript = await speech_to_text(voice)
+
+            now = datetime.datetime.now()
+            # Insert into messages table
+            cursor.execute('''
+                INSERT INTO messages (group_id, group_name, sender_id, sender_name, message_text, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING message_id
+            ''', (group_chat_id, group_name, user_id, name, transcript, now))
+            message_id = cursor.fetchone()[0]
+
+            # Insert message deliveries
+            for (blind_user_id,) in blind_users:
+                cursor.execute('''
+                    INSERT INTO message_deliveries (message_id, user_id, delivered, delivered_at)
+                    VALUES (%s, %s, FALSE, NULL)
+                ''', (message_id, blind_user_id))
+
+            # Mark sender as delivered = TRUE
+            cursor.execute('''
+                INSERT INTO message_deliveries (message_id, user_id, delivered, delivered_at)
+                VALUES (%s, %s, TRUE, %s)
+            ''', (message_id, user_id, now))
+
+            conn.commit()
+
+        # confirmation
         if language == "english":
-            msg = "Your message has been sent." 
+            msg = "Your message has been sent. You can record another" 
         elif language == "arabic":
-            msg = "تم إرسال رسالتك."
+            msg = " تم إرسال رسالتك. يمكنك تسجيل أخرى "
         voice_reply = await text_to_speech(msg)
         await update.message.reply_voice(voice_reply)
+
+
         # Reset state after sending
-        context.user_data["awaiting_group_reply"] = False
-        context.user_data["selected_group"] = None
+        context.user_data["awaiting_group_reply"] = True
+        context.user_data["selected_group"] = group_name
+
+
     except Exception as e:
         print(f"Error sending voice to group: {e}")
         if language == "english":
@@ -385,7 +463,3 @@ async def handle_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             msg = "حدث خطأ أثناء إرسال رسالتك."
         voice_reply = await text_to_speech(msg)
         await update.message.reply_voice(voice_reply)
-
-
-
-
