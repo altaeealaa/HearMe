@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from database.database_functions import get_user_role, get_preffered_language, get_user_language
+from database.database_functions import get_user_role, get_user_language, add_user_to_group, get_user_id_by_username
 from database.database_setup import cursor
 from services.tts_service import text_to_speech
 from services.stt_service import speech_to_text
@@ -60,6 +60,10 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print("[DEBUG] Voice command matched: /check")
                 await check_messages(update, context)
                 return
+            elif matched_help:
+                print("[DEBUG] Voice command matched: /help")
+                await handle_help_command(update, context)
+                return
             elif context.user_data.get("awaiting_group_choice"):
                 await handle_group_choice(update, context)
             elif matched_switch or normalized.startswith("switch to"):
@@ -73,10 +77,6 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif matched_group:
                 print("[DEBUG] Voice command matched: /group")
                 await group_command(update, context)
-                return
-            elif matched_help:
-                print("[DEBUG] Voice command matched: /help")
-                await handle_help_command(update, context)
                 return
             elif matched_settings:
                 print("[DEBUG] Voice command matched: /settings")
@@ -109,9 +109,9 @@ async def group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     # Get user's preferred language
-    language = get_preffered_language(user_id) or "english"
+    language = get_user_language(user_id) or "english"
 
-    cursor.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
     result = cursor.fetchone()
 
     if not result or result[0] != 'blind':
@@ -147,14 +147,15 @@ async def group_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_group_choice"] = True
 
 
-# to check for new messages
+
+#to check new messages
 async def check_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     # Get user's preferred language
-    language = get_preffered_language(user_id) or "english"
+    language = get_user_language(user_id) or "english"
 
-    cursor.execute("SELECT role FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT role FROM users WHERE user_id = %s", (user_id,))
     result = cursor.fetchone()
 
     if not result or result[0] != 'blind':
@@ -163,25 +164,30 @@ async def check_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_voice(await text_to_speech("This command is only for blind users."))
         return
-    
-    cursor.execute("""
-        SELECT DISTINCT group_name 
-        FROM messages 
-        WHERE group_name IS NOT NULL 
-          AND TRIM(group_name) != '' 
-          AND group_name != 'None'
-    """)
-    group_names = cursor.fetchall()
 
-    if group_names:
+    # Get distinct groups user belongs to that have messages
+    cursor.execute('''
+        SELECT DISTINCT g.group_id, g.group_name
+        FROM groups g
+        JOIN user_groups ug ON g.group_id = ug.group_id
+        JOIN messages m ON m.group_id = g.group_id
+        WHERE ug.user_id = %s
+          AND m.message_text IS NOT NULL
+          AND TRIM(g.group_name) != ''
+          AND g.group_name != 'None'
+    ''', (user_id,))
+
+    groups = cursor.fetchall()
+
+    if groups:
         if language == "arabic":
             response = "لديك رسائل جديدة من هذه المجموعات:\n"
-            for group in group_names:
-                response += f"- {group[0]}\n"
+            for _, group_name in groups:
+                response += f"- {group_name}\n"
         else:
             response = "You have new messages from these groups:\n"
-            for group in group_names:
-                response += f"- {group[0]}\n"
+            for _, group_name in groups:
+                response += f"- {group_name}\n"
     else:
         if language == "arabic":
             response = "ليس لديك رسائل جديدة.\nهل هناك مجموعة تريد إرسال رسالة إليها؟ فقط قل اسم المجموعة."
@@ -192,6 +198,8 @@ async def check_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     response_voice = await text_to_speech(response)
     await update.message.reply_voice(response_voice)
+
+
 
 
 
@@ -273,3 +281,38 @@ async def handle_help_command(update: Update, context:ContextTypes.DEFAULT_TYPE)
     await update.message.reply_voice(await text_to_speech(confirmation))
     return
 
+
+
+async def addblind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sender = update.effective_user
+    sender_id = sender.id
+
+    # Check if sender role is sighted (only sighted can add blind users)
+    role = get_user_role(sender_id)
+    if role != "sighted":
+        await update.message.reply_text("❌ Only sighted users can add blind users.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Usage: /addblind @username")
+        return
+
+    blind_username = context.args[0].lstrip("@")
+
+    # Lookup user_id by username in DB
+    blind_user_id = get_user_id_by_username(blind_username)
+    if not blind_user_id:
+        await update.message.reply_text(f"User @{blind_username} not found.")
+        return
+
+    # Check if the user is blind
+    blind_user_role = get_user_role(blind_user_id)
+    if blind_user_role != "blind":
+        await update.message.reply_text(f"User @{blind_username} is not a blind user.")
+        return
+
+    # Add blind user to the group of the sender
+    group_id = update.effective_chat.id
+    add_user_to_group(blind_user_id, group_id)
+
+    await update.message.reply_text(f"✅ Blind user @{blind_username} has been added to this group.")

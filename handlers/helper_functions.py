@@ -19,6 +19,7 @@ def normalize_text(normalized_text):
     # Convert to lowercase and strip both whitespace and punctuation
     return normalized_text.lower().strip().strip(string.punctuation)
 
+
 def fuzzy_language_match(text, options, threshold=70):
     match = process.extractOne(text, options, scorer=fuzz.partial_ratio) #fuzz.partial_ratio looks for partial matches within the input text
     if match and match[1] >= threshold:
@@ -26,3 +27,8 @@ def fuzzy_language_match(text, options, threshold=70):
         return match[0]
 
 
+def get_normalized_user_groups(user_groups):
+    return {
+        normalize_text(name): (group_id, name)
+        for group_id, name in user_groups
+    }

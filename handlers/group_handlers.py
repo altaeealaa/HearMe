@@ -1,11 +1,11 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from database.database_functions import save_group, save_group_message, get_all_group_names 
+from database.database_functions import save_group, save_group_message, get_user_groups 
 from database.database_setup import conn, cursor
 from services.tts_service import text_to_speech
 from services.stt_service import speech_to_text
-from handlers.helper_functions import normalize_text, fuzzy_language_match
-from database.database_functions import get_preffered_language 
+from handlers.helper_functions import normalize_text, fuzzy_language_match, get_normalized_user_groups
+from database.database_functions import get_user_language, add_user_to_group
 
 
 
@@ -23,9 +23,11 @@ async def handle_group_message(update: Update, context):
     # Save group info first (only once due to INSERT OR IGNORE)
     save_group(group_id, group_name)
 
+    add_user_to_group(sender_id, group_id)
+
     if message.text:
         # if the meesage is text, save it directly to the database    
-        save_group_message(group_name, sender_id, sender_name, normalized_text)
+        save_group_message(group_id, group_name, sender_id, sender_name, normalized_text)
         print(f"[SAVED] From {sender_name} in Group {group_name}: {normalized_text}")
     elif message.voice:
         # if the message is a voice, transcribe it and save the transcribed text
@@ -33,7 +35,7 @@ async def handle_group_message(update: Update, context):
         transcribed = await speech_to_text(voice)
         print(f"[DEBUG] Voice transcribed: {transcribed}")
         normalized = normalize_text(transcribed)
-        save_group_message(group_name, sender_id, sender_name, normalized)
+        save_group_message(group_id, group_name, sender_id, sender_name, normalized)
         print(f"[SAVED] From {sender_name} in Group {group_name}: {normalized}")
 
     # Track group_map in memory
@@ -51,11 +53,9 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     user_id = update.effective_user.id
-    language = get_preffered_language(user_id) or "english"
+    language = get_user_language(user_id) or "english"
 
     voice = update.message.voice
-    print(f"[DEBUG] Voice content: {voice}")
-
     if not voice:
         msg = "لم أستلم أي رسالة صوتية. حاول مرة أخرى." if language == "arabic" else "I didn't receive any voice. Please try again."
         await update.message.reply_voice(await text_to_speech(msg))
@@ -63,9 +63,7 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     try:
         transcribed = await speech_to_text(voice)
-        print(f"[DEBUG] Transcribed voice: {transcribed}")
     except Exception as e:
-        print(f"[ERROR] Failed to transcribe voice: {e}")
         msg = "حدث خطأ أثناء معالجة صوتك. حاول مرة أخرى." if language == "arabic" else "There was an error processing your voice. Please try again."
         await update.message.reply_voice(await text_to_speech(msg))
         return
@@ -74,52 +72,49 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         msg = "عذرًا، لم أتمكن من فهم صوتك. حاول مرة أخرى." if language == "arabic" else "Sorry, I couldn't understand your voice. Try again."
         await update.message.reply_voice(await text_to_speech(msg))
         return
-    
 
-     # 💡 Handle switch to {group} command
     if await handle_switch_to_command(update, context, transcribed):
         context.user_data["awaiting_group_choice"] = False
         return
 
     group_choice = normalize_text(transcribed)
-    print(f"[DEBUG] Normalized group choice: {group_choice}")
+    user_group = get_user_groups(user_id)
+    normalized_dict = get_normalized_user_groups(user_group)
+    matched_normalized = fuzzy_language_match(group_choice, list(normalized_dict.keys()))
 
-    all_groups = get_all_group_names()
-    matched_group = fuzzy_language_match(group_choice, all_groups)
-
-    if not matched_group:
+    if not matched_normalized:
         msg = "لم أجد هذه المجموعة. حاول مرة أخرى." if language == "arabic" else "This group is not found. Try again."
-        print(f"[DEBUG] Group not found: {group_choice}")
         await update.message.reply_voice(await text_to_speech(msg))
         return
 
-    group_choice_db = matched_group  # Use the matched group name
+    group_id, original_name = normalized_dict[matched_normalized]
 
-    # Get messages
     cursor.execute('''
-        SELECT sender_name, message_text FROM messages
-        WHERE group_name = ?
-        ORDER BY rowid ASC
-    ''', (group_choice_db,))
+        SELECT m.message_id, m.sender_name, m.message_text
+        FROM messages m
+        LEFT JOIN message_deliveries d ON m.message_id = d.message_id AND d.user_id = %s
+        WHERE m.group_id = %s AND (d.delivered IS NULL OR d.delivered = FALSE)
+        ORDER BY m.created_at ASC
+    ''', (user_id, group_id))
     messages = cursor.fetchall()
 
     if messages:
-        # Group messages by sender
         voice_output = ""
         grouped = []
         prev_sender = None
         current_texts = []
 
-        for sender_name, message_text in messages:
+        message_ids_to_mark = []
+
+        for message_id, sender_name, message_text in messages:
+            message_ids_to_mark.append(message_id)
             if sender_name == prev_sender:
                 current_texts.append(message_text)
             else:
                 if prev_sender is not None:
                     grouped.append((prev_sender, current_texts))
-                #there is no previous sender, first message in group
                 prev_sender = sender_name
                 current_texts = [message_text]
-        # for the last message
         if prev_sender is not None:
             grouped.append((prev_sender, current_texts))
 
@@ -127,32 +122,43 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
             merged_text = ", ".join(texts)
             voice_output += f"{sender} said {merged_text}. "
 
-        if language == "arabic":
-            full_voice = voice_output.strip() + " هل تريد الرد؟ (قل نعم أو لا)"
-        else:
-            full_voice = voice_output.strip() + " Do you want to reply? (Say 'yes' or 'no')"
+        full_voice = voice_output.strip()
+        full_voice += " هل تريد الرد؟ (قل نعم أو لا)" if language == "arabic" else " Do you want to reply? (Say 'yes' or 'no')"
+
         await update.message.reply_voice(await text_to_speech(full_voice))
 
         context.user_data["awaiting_yes_no_reply"] = True
+        context.user_data["selected_group"] = original_name
+        context.user_data["awaiting_group_choice"] = False
 
-        # Delete messages
+        # Mark messages as delivered for this user
+        for message_id in message_ids_to_mark:
+            cursor.execute('''
+                INSERT INTO message_deliveries (message_id, user_id, delivered)
+                VALUES (%s, %s, TRUE)
+                ON CONFLICT (message_id, user_id) DO UPDATE SET delivered = TRUE
+            ''', (message_id, user_id))
+        conn.commit()
+
+        # Try deleting messages fully delivered
         cursor.execute('''
             DELETE FROM messages
-            WHERE group_name = ?
-        ''', (group_choice_db,))
+            WHERE message_id IN (
+                SELECT m.message_id
+                FROM messages m
+                JOIN message_deliveries d ON m.message_id = d.message_id
+                GROUP BY m.message_id
+                HAVING BOOL_AND(d.delivered) = TRUE
+            )
+        ''')
         conn.commit()
-        print(f"[DELETED] All messages from Group {group_choice_db}")
+
     else:
         msg = "حسنًا. سجل رسالتك الصوتية وسأرسلها إلى المجموعة." if language == "arabic" else "Okay. Record your voice and I’ll send it to the group."
         await update.message.reply_voice(await text_to_speech(msg))
         context.user_data["awaiting_group_reply"] = True
-
-    context.user_data["selected_group"] = group_choice_db
-    context.user_data["awaiting_group_choice"] = False
-
-
-
-
+        context.user_data["selected_group"] = original_name
+        context.user_data["awaiting_group_choice"] = False
 
 
 
@@ -163,29 +169,48 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
         return False  # Not a switch command
 
     user_id = update.effective_user.id
-    language = get_preffered_language(user_id) or "english"
+    language = get_user_language(user_id) or "english"
 
     # Extract the group name after "switch to"
-    group_choice = normalize_text(transcribed[9:].strip())
-    print(f"[DEBUG] Switch command detected. Target group: {group_choice}")
+    group_choice = normalize_text(transcribed)
+    print(f"[DEBUG] Normalized group choice: {group_choice}")
 
-    # Fuzzy match with all group names
-    all_groups = get_all_group_names()
-    matched_group = fuzzy_language_match(group_choice, all_groups)
+    user_group = get_user_groups(user_id) # List of (group_id, group_name)
+    normalized_dict = get_normalized_user_groups(user_group) # dict: normalized_name -> (group_id, original_name)
 
-    if not matched_group:
+    matched_normalized = fuzzy_language_match(group_choice, list(normalized_dict.keys()))
+    print(f"matched: {matched_normalized}")
+
+    if not matched_normalized:
+        msg = "لم أجد هذه المجموعة. حاول مرة أخرى." if language == "arabic" else "This group is not found. Try again."
+        print(f"[DEBUG] Group not found: {group_choice}")
+        await update.message.reply_voice(await text_to_speech(msg))
+        return
+    
+    group_id, original_name = normalized_dict[matched_normalized]
+
+    if not matched_normalized:
         msg = "لم أتمكن من العثور على هذه المجموعة. حاول مرة أخرى." if language == "arabic" else "I couldn’t find that group. Try another one."
         await update.message.reply_voice(await text_to_speech(msg))
         return True  # Handled as a switch command, but group not found
+    
 
-    group_choice_db = matched_group
+    #Get group_id for matched group_name
+    cursor.execute('SELECT group_id FROM groups WHERE group_name ILIKE %s', (original_name,))
+    group_row = cursor.fetchone()
+    if not group_row:
+        msg = "لم أجد هذه المجموعة في قاعدة البيانات." if language == "arabic" else "Group not found in the database."
+        await update.message.reply_voice(await text_to_speech(msg))
+        return
 
-    # Fetch group messages
+    group_id = group_row[0]
+
+    # Get messages
     cursor.execute('''
         SELECT sender_name, message_text FROM messages
-        WHERE group_name = ?
-        ORDER BY rowid ASC
-    ''', (group_choice_db,))
+        WHERE group_id = %s
+        ORDER BY created_at ASC
+    ''', (group_id,))
     messages = cursor.fetchall()
 
     if messages:
@@ -213,9 +238,9 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
             voice_output += f"{sender} said {merged_text}. "
 
         if language == "arabic":
-            full_voice = f"تم الانتقال إلى {group_choice_db}. " + voice_output.strip() + " هل تريد الرد؟ (قل نعم أو لا)"
+            full_voice = f"تم الانتقال إلى {original_name}. " + voice_output.strip() + " هل تريد الرد؟ (قل نعم أو لا)"
         else:
-            full_voice = f"Switched to {group_choice_db}. " + voice_output.strip() + " Do you want to reply? (Say 'yes' or 'no')"
+            full_voice = f"Switched to {original_name}. " + voice_output.strip() + " Do you want to reply? (Say 'yes' or 'no')"
         await update.message.reply_voice(await text_to_speech(full_voice))
 
         context.user_data["awaiting_yes_no_reply"] = True
@@ -223,21 +248,22 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
         # Delete messages after reading
         cursor.execute('''
             DELETE FROM messages
-            WHERE group_name = ?
-        ''', (group_choice_db,))
+            WHERE group_id = %s
+        ''', (group_id,))
         conn.commit()
     else:
         # No messages in the group, prompt to send one
         if language == "arabic":
-            msg = f"تم الانتقال إلى {group_choice_db}. لا توجد رسائل جديدة. هل تريد إرسال رسالة؟"
+            msg = f"تم الانتقال إلى {original_name}. لا توجد رسائل جديدة. هل تريد إرسال رسالة؟"
         else:
-            msg = f"Switched to {group_choice_db}. No new messages. Do you want to send one say yes or no?"
+            msg = f"Switched to {original_name}. No new messages. Do you want to send one say yes or no?"
         await update.message.reply_voice(await text_to_speech(msg))
         context.user_data["awaiting_yes_no_reply"] = True
 
 
-    context.user_data["selected_group"] = group_choice_db
+    context.user_data["selected_group"] = original_name
     return True  # Handled as a switch command
+
 
 
 
@@ -245,7 +271,7 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
 # handle the response after asking the user if they want to reply
 async def handle_after_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    language = get_preffered_language(user_id) or "english"
+    language = get_user_language(user_id) or "english"
     yes_words = ['yes', 'اجل', 'نعم']
     no_words = ['no', 'لا', 'كلا']
 
@@ -287,7 +313,7 @@ async def handle_after_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Handles sending a user's voice reply to the selected group.
 async def handle_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    language = get_preffered_language(user_id) 
+    language = get_user_language(user_id) 
 
     # Check if the bot is expecting a group reply
     if not context.user_data.get("awaiting_group_reply"):
@@ -315,7 +341,7 @@ async def handle_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # If not found in memory, look up the group ID in the database
     if not group_chat_id:
-        cursor.execute("SELECT group_id FROM groups WHERE group_name = ?", (group_name,))
+        cursor.execute("SELECT group_id FROM groups WHERE group_name = %s", (group_name,))
         result = cursor.fetchone()
         if result:
             group_chat_id = result[0]
@@ -359,3 +385,7 @@ async def handle_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             msg = "حدث خطأ أثناء إرسال رسالتك."
         voice_reply = await text_to_speech(msg)
         await update.message.reply_voice(voice_reply)
+
+
+
+

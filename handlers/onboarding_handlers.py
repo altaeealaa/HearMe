@@ -4,6 +4,7 @@ from database.database_functions import add_user, update_user_role, update_user_
 from services.tts_service import text_to_speech, merge_texts_to_speech
 from handlers.helper_functions import fuzzy_language_match
 from database.database_setup import cursor
+import os
 
 
 # Handle /start
@@ -12,7 +13,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     cursor.execute("""
     SELECT language FROM users
-    WHERE user_id = ?
+    WHERE user_id = %s
     """, (user_id,))
 
     result = cursor.fetchone() 
@@ -30,6 +31,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         with open(file_path, "rb") as voice:
             await update.message.reply_voice(voice)
+        
+        # ✅ Clean up temporary file after sending
+        try:
+            os.remove(file_path)
+        except OSError as e:
+            print(f"[ERROR] Failed to delete temp voice file: {e}")
             
         context.user_data["awaiting_language"] = True
 
@@ -78,9 +85,10 @@ async def reply_after_language(update: Update, context: ContextTypes.DEFAULT_TYP
 
     user_id = update.message.from_user.id
     name = update.message.from_user.full_name
+    username = update.message.from_user.username
     role = ""
     #language = context.user_data["language"]
-    add_user(user_id, name, role, language)
+    add_user(user_id, name,username, role, language)
     if language == 'english':
         await update.message.reply_voice(await text_to_speech("Thank you. Now please say if you are blind or sighted."))
     else:
@@ -103,7 +111,7 @@ async def set_role(update: Update, context: ContextTypes.DEFAULT_TYPE, normalize
 
     cursor.execute("""
     SELECT role FROM users
-    WHERE user_id = ?
+    WHERE user_id = %s
     """, (user_id,))
 
     result = cursor.fetchone()
