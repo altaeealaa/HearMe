@@ -168,3 +168,14 @@ def get_user_id_by_username(username):
     ''', (username,))
     result = cursor.fetchone()
     return result[0] if result else None
+
+
+
+def is_user_in_group(user_id: int, group_id: int) -> bool:
+    cursor.execute('''
+            SELECT 1 FROM user_groups
+            WHERE user_id = %s AND group_id = %s
+            LIMIT 1
+        ''', (user_id, group_id))
+    result = cursor.fetchone()
+    return result is not None

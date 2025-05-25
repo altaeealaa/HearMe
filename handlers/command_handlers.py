@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from database.database_functions import get_user_role, get_user_language, add_user_to_group, get_user_id_by_username
+from database.database_functions import get_user_role, get_user_language, add_user_to_group, get_user_id_by_username, is_user_in_group
 from database.database_setup import cursor
 from services.tts_service import text_to_speech
 from services.stt_service import speech_to_text
@@ -293,25 +293,39 @@ async def addblind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /addblind @username")
+        await update.message.reply_text("Usage: /addblind @username ")
         return
-
-    blind_username = context.args[0].lstrip("@")
-
-    # Lookup user_id by username in DB
-    blind_user_id = get_user_id_by_username(blind_username)
-    if not blind_user_id:
-        await update.message.reply_text(f"User @{blind_username} not found.")
-        return
-
-    # Check if the user is blind
-    blind_user_role = get_user_role(blind_user_id)
-    if blind_user_role != "blind":
-        await update.message.reply_text(f"User @{blind_username} is not a blind user.")
-        return
-
-    # Add blind user to the group of the sender
+    
     group_id = update.effective_chat.id
-    add_user_to_group(blind_user_id, group_id)
+    added_users = []
+    failed_users = []
 
-    await update.message.reply_text(f"✅ Blind user @{blind_username} has been added to this group.")
+    for arg in context.args:
+        blind_username = arg.lstrip("@")
+        blind_user_id = get_user_id_by_username(blind_username)
+
+        if not blind_user_id:
+            failed_users.append(f"@{blind_username} (not found)")
+            continue
+
+        blind_user_role = get_user_role(blind_user_id)
+        if blind_user_role != "blind":
+            failed_users.append(f"@{blind_username} (not blind)")
+            continue
+
+        if is_user_in_group(blind_user_id, group_id):
+            failed_users.append(f"@{blind_username} (already in group)")
+            continue
+
+        # Add to group
+        add_user_to_group(blind_user_id, group_id)
+        added_users.append(f"@{blind_username}")
+
+    # Build reply message
+    response = ""
+    if added_users:
+        response += "✅ Added: " + ", ".join(added_users) + "\n"
+    if failed_users:
+        response += "❌ Skipped: " + ", ".join(failed_users)
+
+    await update.message.reply_text(response.strip())
