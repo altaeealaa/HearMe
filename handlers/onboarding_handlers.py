@@ -20,7 +20,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Check if the language is set
     if result is not None and result[0] not in (None, ''):
-        if result == 'english':
+        if result[0] == 'english':
             await update.message.reply_voice(await text_to_speech("You already clicked start and set the language, you can say 'settings' to change it"))
         else:
             await update.message.reply_voice(await text_to_speech("لقد حدّدت اللغة مسبقًا، لتغييرها يمكنك قول settings"))
@@ -83,12 +83,13 @@ async def reply_after_language(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["language"] = language
     context.user_data["awaiting_language"] = False
 
+    # New user setup: Add to DB and prompt for role
     user_id = update.message.from_user.id
     name = update.message.from_user.full_name
     username = update.message.from_user.username
-    role = ""
-    #language = context.user_data["language"]
+    role = ""  # Not set yet
     add_user(user_id, name,username, role, language)
+
     if language == 'english':
         await update.message.reply_voice(await text_to_speech("Thank you. Now please say if you are blind or sighted."))
     else:
@@ -122,61 +123,78 @@ async def set_role(update: Update, context: ContextTypes.DEFAULT_TYPE, normalize
             await update.message.reply_voice(await text_to_speech("You have already clicked start and set the role, you can say 'settings' to change it"))
         else:
             await update.message.reply_voice(await text_to_speech("لقد تمّ تحديد الصفة سابقًا من قبلك. لتغييرها، قل setting "))
-    else:
-        print(f"[DEBUG] Transcribed text: {normalized_text}")
+   
+    print(f"[DEBUG] Transcribed text: {normalized_text}")
 
-        matched_role = fuzzy_language_match(normalized_text, ["blind", "sighted", "أعمى", "بصير", "basir"])
+    matched_role = fuzzy_language_match(normalized_text, ["blind", "sighted", "أعمى", "بصير", "basir"])
 
-        if matched_role is None:
-            if language == "english":
-                await update.message.reply_voice(await text_to_speech("I didn't understand. Please say 'blind' or 'sighted'."))
-            else:
-                await update.message.reply_voice(await text_to_speech("لم أفهم، الرجاء قول أعمى أو بصير"))
-
-            return
-
+    if matched_role is None:
         if language == "english":
-            if matched_role == "blind":
-                confirmation = f"Your role is set to {role.capitalize()} and language to {language.capitalize()}." \
-                    f"Here are the voice commands you can use any time:" \
-                    f"Say 'group' to hear all available groups." \
-                    f"Say 'check' to listen to your new messages." \
-                    f"Say 'switch to' followed by a group name to change groups." \
-                    f"Say 'leave group' if you want to exit a group." \
-                    f"Say 'help' to hear these instructions again." \
-                    f"Say 'settings' to change your language." \
-                    f"Just speak naturally. I’m always listening and ready to help."
-                
-                role = matched_role
-            else:
-                confirmation = f"Your role is set to {role.capitalize()} and language to {language.capitalize()}." \
-                f"If you want to communicate with a blind user with me, kindly add me to a group between you."\
-                f"And I will convert all your messages to voice and send them to the blind. Other than that, I have no functions to offer you."\
-                f"Thank you for visiting me!"
+            await update.message.reply_voice(await text_to_speech("I didn't understand. Please say 'blind' or 'sighted'."))
+        else:
+            await update.message.reply_voice(await text_to_speech("لم أفهم، الرجاء قول أعمى أو بصير"))
+        return
+    
 
-        else: 
-            if matched_role == "أعمى":
-                role = "blind"
-                            
-                confirmation = f"يمكنك استعمال هذه الكلمات المفتاحية:" \
-                    f"'group' لتعرف المجموعات التي دخلت فبها." \
-                    f"'check' لتسمع الرسائل الجديدة التي وصلتك." \
-                    f"'switch to' لتغيير المجموعة التي تود التحدث فيها، مع ذكر اسم المجموعة بعدها." \
-                    f" 'leave group' للخروج من مجموعة." \
-                    f"'help' لسماع هذه الارشادات مرة أخرى." \
-                    f"'settings'لتغيير اللغة ." \
-                    f"تحدث كما تشاء، أنا هنا لأساعدك!"
-                
-            else:
-                role = "sighted" 
-                confirmation = f"اذا أردت التةاصل مع شخص أعمى من خلالي، لطفًا زدني على مجموعة بينك وبينه،"\
-                f"وأنا سأتكفّل بتحويل رسائلك إلى تسجيلات صوتية وإرسالها له."\
-                f"غير هذه الخاصية، ليس عندي ميزات لك لأطلعك عليها. شكرًا على تعاونك!"
+    # ✅ Assign the role before using it
+    if matched_role in ["blind", "sighted"]:
+        role = matched_role
+    elif matched_role in ["أعمى"]:
+        role = "blind"
+    else:
+        role = "sighted"
 
-        # Update role in database
-        update_user_role(user_id, role)  
+    # English confirmation
+    if language == "english":
+        if role == "blind":
+            confirmation = (
+                f"Your role is set to {role.capitalize()} and language to {language.capitalize()}.\n"
+                f"Here are the voice commands you can use:\n"
+                f"- 'group' to hear available groups\n"
+                f"- 'check' to listen to your new messages\n"
+                f"- 'switch to' + group name to change groups\n"
+                f"- 'help' to hear these instructions again\n"
+                f"- 'settings' to change your language.\n"
+                f"Speak naturally. I’m listening!"
+            )
+        else:
+            confirmation = (
+                f"Your role is set to {role.capitalize()} and language to {language.capitalize()}.\n"
+                f"If you want to communicate with a blind user, add me to a group with them.\n"
+                f"Then, send a message and type the command:\n"
+                f"/addblind @username for each blind user in the group.\n"
+                f"I will convert your messages to voice and deliver them.\n"
+                f"Otherwise, I have no features to offer.\n"
+                f"Thanks for trying me!"
+            )
+    
+    # Arabic confirmation
+    else:
+        if role == "blind":
+            confirmation = (
+                f"يمكنك استعمال هذه الكلمات المفتاحية:\n"
+                f"- 'group' لتعرف المجموعات التي دخلت فيها\n"
+                f"- 'check' لتسمع الرسائل الجديدة\n"
+                f"- 'switch to' لتغيير المجموعة\n"
+                f"- 'help' لسماع هذه الإرشادات\n"
+                f"- 'settings' لتغيير اللغة\n"
+                f"تحدث كما تشاء، أنا هنا لأساعدك!"
+            )
+        else:
+            confirmation = (
+                f"اذا أردت التواصل مع شخص أعمى من خلالي، زدني على مجموعة بينكما.\n"
+                f"سأتكفّل بتحويل رسائلك إلى تسجيلات صوتية.\n"
+                f"ثم أرسل رسالة في المجموعة واكتب الأمر:\n"
+                f"/addblind @username لكل مستخدم أعمى موجود في المجموعة.\n"
+                f"غير ذلك، لا أملك ميزات مخصصة لك.\n"
+                f"شكرًا لتعاونك!"
+            )
 
-        # Clear context
-        context.user_data.clear()
+    # ✅ Save to database
+    update_user_role(user_id, role)
 
-        await update.message.reply_voice(await text_to_speech(confirmation))
+    # ✅ Clear flags
+    context.user_data.clear()
+
+    await update.message.reply_voice(await text_to_speech(confirmation))
+    

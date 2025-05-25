@@ -260,7 +260,6 @@ async def handle_help_command(update: Update, context:ContextTypes.DEFAULT_TYPE)
                     f"Say 'group' to hear all available groups." \
                     f"Say 'check' to listen to your new messages." \
                     f"Say 'switch to' followed by a group name to change groups." \
-                    f"Say 'leave group' if you want to exit a group." \
                     f"Say 'help' to hear these instructions again." \
                     f"Say 'settings' to change your language." \
                     f"Just speak naturally. I’m always listening and ready to help."
@@ -270,7 +269,6 @@ async def handle_help_command(update: Update, context:ContextTypes.DEFAULT_TYPE)
                     f"'group' لتعرف المجموعات التي دخلت فبها." \
                     f"'check' لتسمع الرسائل الجديدة التي وصلتك." \
                     f"'switch to' لتغيير المجموعة التي تود التحدث فيها، مع ذكر اسم المجموعة بعدها." \
-                    f" 'leave group' للخروج من مجموعة." \
                     f"'help' لسماع هذه الارشادات مرة أخرى." \
                     f"'settings'لتغيير اللغة  ." \
                     f"تحدث كما تشاء، أنا هنا لأساعدك!"
