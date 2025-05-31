@@ -6,6 +6,15 @@ from telegram import Update
 from telegram.ext import ContextTypes 
 from database.database_functions import save_group, save_group_message
 
+
+import os
+import torch
+from PIL import Image
+from transformers import BlipProcessor, BlipForConditionalGeneration
+from telegram import Update
+from telegram.ext import ContextTypes 
+from database.database_functions import save_group, save_group_message
+
 # Load BLIP model once
 device = "cuda" if torch.cuda.is_available() else "cpu"
 processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base", use_fast=True)
@@ -53,5 +62,4 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(image_path)
         #if os.path.exists(voice_path):
             #os.remove(voice_path)
-
 

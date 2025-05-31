@@ -1,0 +1,6 @@
+# Ignore large models, checkpoints, or local image files
+image.py
+models/
+*.ckpt
+*.jpg
+*.png

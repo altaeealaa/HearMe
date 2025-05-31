@@ -15,13 +15,6 @@ def add_user(user_id, name,username, role, language):
     conn.commit()
 
 
-def update_user_role(user_id, new_role):
-    cursor.execute('''
-        UPDATE users SET role = %s WHERE user_id = %s
-    ''', (new_role, user_id))
-    conn.commit()
-
-
 def get_user_role(user_id):
     cursor.execute('SELECT role FROM users WHERE user_id = %s', (user_id,))
     result = cursor.fetchone()
@@ -55,6 +48,7 @@ def save_group(group_id, group_name):
     return result[0]
 
 
+# to differentiate between multiple blinds using the bot
 def add_user_to_group(user_id, group_id):
     # Check user role
     cursor.execute('SELECT role FROM users WHERE user_id = %s', (user_id,))
@@ -72,6 +66,7 @@ def add_user_to_group(user_id, group_id):
         conn.commit()
 
 
+# to check existing groups for each independent blind
 def get_user_groups(user_id):
     cursor.execute('''
         SELECT g.group_id, g.group_name
@@ -114,6 +109,8 @@ def save_group_message(group_id, group_name, sender_id, sender_name, message_tex
 
 
 
+# make it Unseen
+# get the unseen messages by an independent blind
 def get_undelivered_messages(user_id, group_id):
     cursor.execute('''
         SELECT m.sender_name, m.message_text, m.message_id
@@ -125,7 +122,8 @@ def get_undelivered_messages(user_id, group_id):
     return cursor.fetchall()
 
 
-
+# delete delivered_at
+# set seen messages as delivered in message_deliveries table
 def mark_messages_as_delivered(user_id, message_ids):
     if not message_ids:
         return  # No messages to mark
@@ -144,6 +142,7 @@ def mark_messages_as_delivered(user_id, message_ids):
 
 
 
+# delete messaage when seen by all blind in the same group
 def delete_fully_delivered_messages():
     cursor.execute('''
         DELETE FROM messages
