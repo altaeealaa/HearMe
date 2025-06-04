@@ -96,7 +96,7 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         SELECT m.message_id, m.sender_name, m.message_text
         FROM messages m
         LEFT JOIN message_deliveries d ON m.message_id = d.message_id AND d.user_id = %s
-        WHERE m.group_id = %s AND (d.delivered IS NULL OR d.delivered = FALSE)
+        WHERE m.group_id = %s AND (d.seen IS NULL OR d.seen = FALSE)
         ORDER BY m.created_at ASC
     ''', (user_id, group_id))
     messages = cursor.fetchall()
@@ -136,9 +136,9 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # Mark messages as delivered for this blind user
         cursor.executemany('''
-            INSERT INTO message_deliveries (message_id, user_id, delivered)
+            INSERT INTO message_deliveries (message_id, user_id, seen)
             VALUES (%s, %s, TRUE)
-            ON CONFLICT (message_id, user_id) DO UPDATE SET delivered = TRUE
+            ON CONFLICT (message_id, user_id) DO UPDATE SET seen = TRUE
         ''', [(mid, user_id) for mid in message_ids_to_mark])
         conn.commit()
 
@@ -152,7 +152,7 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
                 JOIN users u ON d.user_id = u.user_id
                 WHERE u.role = 'blind'
                 GROUP BY m.message_id
-                HAVING BOOL_AND(d.delivered) = TRUE
+                HAVING BOOL_AND(d.seen) = TRUE
             )
         ''')
         conn.commit()
@@ -215,7 +215,7 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
         SELECT m.message_id, m.sender_name, m.message_text
         FROM messages m
         LEFT JOIN message_deliveries d ON m.message_id = d.message_id AND d.user_id = %s
-        WHERE m.group_id = %s AND (d.delivered IS NULL OR d.delivered = FALSE)
+        WHERE m.group_id = %s AND (d.seen IS NULL OR d.seen = FALSE)
         ORDER BY m.created_at ASC
     ''', (user_id, group_id))
     messages = cursor.fetchall()
@@ -256,9 +256,9 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
 
         # Mark messages as delivered for this blind user
         cursor.executemany('''
-            INSERT INTO message_deliveries (message_id, user_id, delivered)
+            INSERT INTO message_deliveries (message_id, user_id, seen)
             VALUES (%s, %s, TRUE)
-            ON CONFLICT (message_id, user_id) DO UPDATE SET delivered = TRUE
+            ON CONFLICT (message_id, user_id) DO UPDATE SET seen = TRUE
         ''', [(mid, user_id) for mid in message_ids_to_mark])
         conn.commit()
 
@@ -272,7 +272,7 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
                 JOIN users u ON d.user_id = u.user_id
                 WHERE u.role = 'blind'
                 GROUP BY m.message_id
-                HAVING BOOL_AND(d.delivered) = TRUE
+                HAVING BOOL_AND(d.seen) = TRUE
             )
         ''')
         conn.commit()
@@ -429,15 +429,15 @@ async def handle_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # Insert message deliveries
             for (blind_user_id,) in blind_users:
                 cursor.execute('''
-                    INSERT INTO message_deliveries (message_id, user_id, delivered, delivered_at)
-                    VALUES (%s, %s, FALSE, NULL)
+                    INSERT INTO message_deliveries (message_id, user_id, seen)
+                    VALUES (%s, %s, FALSE)
                 ''', (message_id, blind_user_id))
 
             # Mark sender as delivered = TRUE
             cursor.execute('''
-                INSERT INTO message_deliveries (message_id, user_id, delivered, delivered_at)
-                VALUES (%s, %s, TRUE, %s)
-            ''', (message_id, user_id, now))
+                INSERT INTO message_deliveries (message_id, user_id, seen)
+                VALUES (%s, %s, TRUE)
+            ''', (message_id, user_id))
 
             conn.commit()
 

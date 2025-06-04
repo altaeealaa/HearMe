@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from database.database_functions import get_user_role, get_user_language, add_user_to_group, get_user_id_by_username, is_user_in_group
+from database.database_functions import get_user_role, get_user_language, add_user_to_group, get_user_id_by_username, is_user_in_group, save_group
 from database.database_setup import cursor
 from services.tts_service import text_to_speech
 from services.stt_service import speech_to_text
@@ -79,11 +79,11 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print("[DEBUG] Voice command matched: /settings")
                 await handle_settings_command(update, context)
                 return
-            elif context.user_data.get("awaiting_group_reply"):
-                await handle_voice_reply(update, context) 
             elif context.user_data.get("awaiting_yes_no_reply"):
                 context.user_data["awaiting_yes_no_reply"] = False
-                await handle_after_ask(update, context)                   
+                await handle_after_ask(update, context) 
+            elif context.user_data.get("awaiting_group_reply"):
+                await handle_voice_reply(update, context)     
             else:
                 print(f"[DEBUG] Unmatched voice command: {normalized}")
                 await update.message.reply_voice(
@@ -277,9 +277,16 @@ async def handle_help_command(update: Update, context:ContextTypes.DEFAULT_TYPE)
 
 
 
+#adding blind with associated group
 async def addblind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender = update.effective_user
     sender_id = sender.id
+    group_name = update.effective_chat.title
+    group_id = update.effective_chat.id
+
+    # Save group info first (only once due to INSERT OR IGNORE)
+    save_group(group_id, group_name)
+
 
     # Check if sender role is sighted (only sighted can add blind users)
     role = get_user_role(sender_id)
@@ -291,7 +298,7 @@ async def addblind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /addblind @username ")
         return
     
-    group_id = update.effective_chat.id
+    
     added_users = []
     failed_users = []
 

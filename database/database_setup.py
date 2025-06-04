@@ -45,7 +45,7 @@ def setup_database():
             sender_id BIGINT,
             sender_name TEXT,
             message_text TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP   
         )
     ''')
 
@@ -54,17 +54,16 @@ def setup_database():
         CREATE TABLE IF NOT EXISTS message_deliveries (
             message_id BIGINT REFERENCES messages(message_id) ON DELETE CASCADE,
             user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
-            delivered BOOLEAN DEFAULT FALSE,
-            delivered_at TIMESTAMP,
+            seen BOOLEAN DEFAULT FALSE,
             PRIMARY KEY (message_id, user_id)
         )
     ''')
 
     # Optional performance index
-    cursor.execute('''
-        CREATE INDEX IF NOT EXISTS idx_message_deliveries_delivered
-            ON message_deliveries (user_id, delivered)
-    ''')
+    #cursor.execute('''
+        #CREATE INDEX IF NOT EXISTS idx_message_deliveries_delivered
+            #ON message_deliveries (user_id, delivered)
+    #''')
 
     conn.commit()
     print("✅ Tables created successfully")
