@@ -21,6 +21,12 @@ def get_user_role(user_id):
     return result[0] if result else None
 
 
+def update_user_role(user_id, new_role):
+    cursor.execute('''
+        UPDATE users SET role = %s WHERE user_id = %s
+    ''', (new_role, user_id))
+    conn.commit()
+
 def update_user_language(user_id, new_language):
     cursor.execute('''
         UPDATE users SET language = %s WHERE user_id = %s
@@ -109,28 +115,25 @@ def save_group_message(group_id, group_name, sender_id, sender_name, message_tex
 
 
 
-# make it Unseen
 # get the unseen messages by an independent blind
-def get_undelivered_messages(user_id, group_id):
+def get_unSeen_messages(user_id, group_id):
     cursor.execute('''
         SELECT m.sender_name, m.message_text, m.message_id
         FROM messages m
         JOIN message_deliveries d ON m.message_id = d.message_id
-        WHERE d.user_id = %s AND d.delivered = FALSE AND m.group_id = %s
+        WHERE d.user_id = %s AND d.seen = FALSE AND m.group_id = %s
         ORDER BY m.created_at ASC
     ''', (user_id, group_id))
     return cursor.fetchall()
 
-
-# delete delivered_at
 # set seen messages as delivered in message_deliveries table
-def mark_messages_as_delivered(user_id, message_ids):
+def mark_messages_as_Seen(user_id, message_ids):
     if not message_ids:
         return  # No messages to mark
 
     cursor.executemany('''
         UPDATE message_deliveries
-        SET delivered = TRUE, delivered_at = CURRENT_TIMESTAMP
+        SET seen = TRUE
         WHERE user_id = %s AND message_id = %s
     ''', [(user_id, message_id) for message_id in message_ids])
     conn.commit()
@@ -153,11 +156,10 @@ def delete_fully_delivered_messages():
             JOIN users u ON d.user_id = u.user_id
             WHERE u.role = 'blind'
             GROUP BY m.message_id
-            HAVING BOOL_AND(d.delivered) = TRUE
+            HAVING BOOL_AND(d.seen) = TRUE
         )
     ''')
     conn.commit()
-
 
 
 def get_user_id_by_username(username):

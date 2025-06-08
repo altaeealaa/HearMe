@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from database.database_functions import save_group, save_group_message, get_user_groups 
+from database.database_functions import save_group, save_group_message, get_user_groups, get_unSeen_messages, mark_messages_as_Seen, delete_fully_delivered_messages
 from database.database_setup import conn, cursor
 from services.tts_service import text_to_speech
 from services.stt_service import speech_to_text
@@ -90,18 +90,10 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     group_id, original_name = normalized_dict[matched_normalized]
 
-
-    # Fetch messages not delivered to this blind user
-    cursor.execute('''
-        SELECT m.message_id, m.sender_name, m.message_text
-        FROM messages m
-        LEFT JOIN message_deliveries d ON m.message_id = d.message_id AND d.user_id = %s
-        WHERE m.group_id = %s AND (d.delivered IS NULL OR d.delivered = FALSE)
-        ORDER BY m.created_at ASC
-    ''', (user_id, group_id))
-    messages = cursor.fetchall()
+    messages = get_unSeen_messages(user_id, group_id)
 
     if messages:
+        # If the previous sender is the same, merge their messages and only say the sender name once
         voice_output = ""
         grouped = []
         prev_sender = None
@@ -109,7 +101,7 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         message_ids_to_mark = []
 
-        for message_id, sender_name, message_text in messages:
+        for sender_name, message_text, message_id in messages:
             message_ids_to_mark.append(message_id)
             if sender_name == prev_sender:
                 current_texts.append(message_text)
@@ -135,27 +127,8 @@ async def handle_group_choice(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["awaiting_group_choice"] = False
 
         # Mark messages as delivered for this blind user
-        cursor.executemany('''
-            INSERT INTO message_deliveries (message_id, user_id, delivered)
-            VALUES (%s, %s, TRUE)
-            ON CONFLICT (message_id, user_id) DO UPDATE SET delivered = TRUE
-        ''', [(mid, user_id) for mid in message_ids_to_mark])
-        conn.commit()
+        mark_messages_as_Seen(user_id, message_ids_to_mark)
 
-        # Delete messages that are fully delivered to all blind users in that group
-        cursor.execute('''
-            DELETE FROM messages
-            WHERE message_id IN (
-                SELECT m.message_id
-                FROM messages m
-                JOIN message_deliveries d ON m.message_id = d.message_id
-                JOIN users u ON d.user_id = u.user_id
-                WHERE u.role = 'blind'
-                GROUP BY m.message_id
-                HAVING BOOL_AND(d.delivered) = TRUE
-            )
-        ''')
-        conn.commit()
     else:
         msg = "لا توجد رسائل جديدة. هل تريد إرسال رسالة قل نعم أو لا ؟" if language == "arabic" else "No new messages. Do you want to send one say yes or no?"
         await update.message.reply_voice(await text_to_speech(msg))
@@ -210,15 +183,8 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
 
     group_id = group_row[0]
 
-    # Fetch messages not delivered to this blind user
-    cursor.execute('''
-        SELECT m.message_id, m.sender_name, m.message_text
-        FROM messages m
-        LEFT JOIN message_deliveries d ON m.message_id = d.message_id AND d.user_id = %s
-        WHERE m.group_id = %s AND (d.delivered IS NULL OR d.delivered = FALSE)
-        ORDER BY m.created_at ASC
-    ''', (user_id, group_id))
-    messages = cursor.fetchall()
+    # Fetch messages not seen by this blind user
+    messages = get_unSeen_messages(user_id, group_id)
 
     if messages:
         voice_output = ""
@@ -228,7 +194,7 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
 
         message_ids_to_mark = []
 
-        for message_id, sender_name, message_text in messages:
+        for sender_name, message_text, message_id in messages:
             message_ids_to_mark.append(message_id)
             if sender_name == prev_sender:
                 current_texts.append(message_text)
@@ -255,28 +221,8 @@ async def handle_switch_to_command(update: Update, context: ContextTypes.DEFAULT
         context.user_data["awaiting_group_choice"] = False
 
         # Mark messages as delivered for this blind user
-        cursor.executemany('''
-            INSERT INTO message_deliveries (message_id, user_id, delivered)
-            VALUES (%s, %s, TRUE)
-            ON CONFLICT (message_id, user_id) DO UPDATE SET delivered = TRUE
-        ''', [(mid, user_id) for mid in message_ids_to_mark])
-        conn.commit()
-
-        # Delete messages that are fully delivered to all blind users in that group
-        cursor.execute('''
-            DELETE FROM messages
-            WHERE message_id IN (
-                SELECT m.message_id
-                FROM messages m
-                JOIN message_deliveries d ON m.message_id = d.message_id
-                JOIN users u ON d.user_id = u.user_id
-                WHERE u.role = 'blind'
-                GROUP BY m.message_id
-                HAVING BOOL_AND(d.delivered) = TRUE
-            )
-        ''')
-        conn.commit()
-    
+        mark_messages_as_Seen(user_id, message_ids_to_mark)
+        
     else:
         # No messages in the group, prompt to send one
         if language == "arabic":
@@ -429,15 +375,15 @@ async def handle_voice_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # Insert message deliveries
             for (blind_user_id,) in blind_users:
                 cursor.execute('''
-                    INSERT INTO message_deliveries (message_id, user_id, delivered, delivered_at)
-                    VALUES (%s, %s, FALSE, NULL)
+                    INSERT INTO message_deliveries (message_id, user_id, seen)
+                    VALUES (%s, %s, FALSE)
                 ''', (message_id, blind_user_id))
 
             # Mark sender as delivered = TRUE
             cursor.execute('''
-                INSERT INTO message_deliveries (message_id, user_id, delivered, delivered_at)
-                VALUES (%s, %s, TRUE, %s)
-            ''', (message_id, user_id, now))
+                INSERT INTO message_deliveries (message_id, user_id, seen)
+                VALUES (%s, %s, TRUE)
+            ''', (message_id, user_id))
 
             conn.commit()
 

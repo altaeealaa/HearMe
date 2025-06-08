@@ -40,18 +40,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         group_id = update.effective_chat.id
         sender = update.message.from_user
         sender_name = sender.full_name
-        image_caption = "caption of the image is {caption}"
+        image_caption = f"sent an image containing {caption}"
         save_group(group_id, group_name)
-        save_group_message(group_name, sender.id, sender_name, image_caption)
+        save_group_message(group_id, group_name, sender.id, sender_name, image_caption)
         print(f"[SAVED] From {sender_name} in Group {group_name}:{sender_name} sent an image contaning {caption}")
-
-        # Convert to voice
-        #tts = gTTS(caption)
-        #voice_path = f"{update.message.message_id}_caption.mp3"
-        #tts.save(voice_path)
-
-        #with open(voice_path, "rb") as voice:
-            #await update.message.reply_voice(voice)
 
     except Exception as e:
         await update.message.reply_text("⚠️ Sorry, something went wrong processing the image.")
